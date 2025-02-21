@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BSC DEX Arbitrage Terminal</title>
+    <script src="https://cdn.jsdelivr.net/npm/web3@latest/dist/web3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #000;
+            color: #0f0;
+            text-align: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: auto;
+            background: #111;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0, 255, 0, 0.5);
+        }
+        .arb-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .arb-table th, .arb-table td {
+            border: 1px solid #0f0;
+            padding: 10px;
+            text-align: center;
+        }
+        .arb-table th {
+            background: #222;
+        }
+        .highlight {
+            color: #ff0;
+            font-weight: bold;
+        }
+        .live-indicator {
+            color: red;
+            font-weight: bold;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            50% { opacity: 0.2; }
+        }
+        #chartContainer {
+            margin-top: 20px;
+        }
+        .error-message {
+            color: #ff4444;
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(255, 0, 0, 0.1);
+            border-radius: 5px;
+            display: none;
+        }
+        .status-bar {
+            margin-top: 10px;
+            padding: 5px;
+            background: rgba(0, 255, 0, 0.1);
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>BSC DEX Arbitrage Terminal <span class="live-indicator">● LIVE</span></h1>
+        <p>Real-time tracking of arbitrage opportunities across Binance Smart Chain.</p>
+        <div id="error-container" class="error-message"></div>
+        <table class="arb-table">
+            <thead>
+                <tr>
+                    <th>Token</th>
+                    <th>Arbitrage %</th>
+                    <th>Lowest Price</th>
+                    <th>Highest Price</th>
+                    <th>Last Update</th>
+                </tr>
+            </thead>
+            <tbody id="arb-container"></tbody>
+        </table>
+        <div class="status-bar">
+            <span>Next update in: <span id="countdown">10</span>s</span> | 
+            <span>Last fetch: <span id="last-fetch">--</span></span>
+        </div>
+        <p><em>Data updates every 10 seconds.</em></p>
+        <div id="chartContainer">
+            <canvas id="arbChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const BSC_RPC = "https://bsc-dataseed.binance.org/";
+        const web3 = new Web3(new Web3.providers.HttpProvider(BSC_RPC));
+        const DEX_APIS = {
+            PancakeSwap: "https://api.pancakeswap.info/api/v2/tokens/",
+            Apeswap: "https://api.apeswap.finance/token/",
+            Biswap: "https://api.biswap.org/token/"
+        };
+        const TOKEN_PAIRS = [
+            { symbol: "BNB", address: "0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" },
+            { symbol: "CAKE", address: "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82" }
+        ];
+        
+        let countdownInterval;
+        
+        async function fetchPrices() {
+            let results = [];
+            let timestamp = new Date().toLocaleTimeString();
+            document.getElementById('last-fetch').textContent = timestamp;
+            
+            try {
+                for (let token of TOKEN_PAIRS) {
+                    let prices = {};
+                    for (let dex in DEX_APIS) {
+                        try {
+                            let response = await axios.get(DEX_APIS[dex] + token.address);
+                            prices[dex] = parseFloat(response.data.data.price);
+                        } catch (error) {
+                            console.error(`Error fetching price from ${dex} for ${token.symbol}:`, error);
+                            showError(`Failed to fetch ${token.symbol} price from ${dex}`);
+                        }
+                    }
+                    if (Object.keys(prices).length > 1) {
+                        let maxPrice = Math.max(...Object.values(prices));
+                        let minPrice = Math.min(...Object.values(prices));
+                        let arbitragePercentage = ((maxPrice - minPrice) / minPrice) * 100;
+                        results.push({ token: token.symbol, minPrice, maxPrice, arbitragePercentage, timestamp });
+                    }
+                }
+            } catch (error) {
+                console.error('Error in fetchPrices:', error);
+                showError('Failed to fetch price data');
+            }
+            return results;
+        }
+        
+        function showError(message) {
+            const errorContainer = document.getElementById('error-container');
+            errorContainer.textContent = message;
+            errorContainer.style.display = 'block';
+            setTimeout(() => {
+                errorContainer.style.display = 'none';
+            }, 5000);
+        }
+        
+        function startCountdown() {
+            let count = 10;
+            if (countdownInterval) clearInterval(countdownInterval);
+            
+            countdownInterval = setInterval(() => {
+                count--;
+                document.getElementById('countdown').textContent = count;
+                if (count <= 0) count = 10;
+            }, 1000);
+        }
+        
+        async function updateArbitrageDisplay() {
+            let arbContainer = document.getElementById("arb-container");
+            arbContainer.innerHTML = "";
+            let opportunities = await fetchPrices();
+            let chartLabels = [], chartData = [];
+            
+            opportunities.forEach(opportunity => {
+                let html = `
+                    <tr>
+                        <td class="highlight">${opportunity.token}</td>
+                        <td class="highlight">${opportunity.arbitragePercentage.toFixed(2)}%</td>
+                        <td>$${opportunity.minPrice.toFixed(4)}</td>
+                        <td>$${opportunity.maxPrice.toFixed(4)}</td>
+                        <td>${opportunity.timestamp}</td>
+                    </tr>
+                `;
+                arbContainer.innerHTML += html;
+                chartLabels.push(opportunity.token);
+                chartData.push(opportunity.arbitragePercentage);
+            });
+            updateChart(chartLabels, chartData);
+            startCountdown();
+        }
+        
+        function updateChart(labels, data) {
+            let ctx = document.getElementById('arbChart').getContext('2d');
+            if (window.arbChartInstance) window.arbChartInstance.destroy();
+            window.arbChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Arbitrage %',
+                        data: data,
+                        backgroundColor: 'rgba(0, 255, 0, 0.5)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: { 
+                        y: { 
+                            beginAtZero: true,
+                            grid: {
+                                color: 'rgba(0, 255, 0, 0.1)'
+                            },
+                            ticks: {
+                                color: '#0f0'
+                            }
+                        },
+                        x: {
+                            grid: {
+                                color: 'rgba(0, 255, 0, 0.1)'
+                            },
+                            ticks: {
+                                color: '#0f0'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#0f0'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        updateArbitrageDisplay();
+        setInterval(updateArbitrageDisplay, 10000);
+    </script>
+</body>
+</html>
